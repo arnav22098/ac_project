@@ -38,6 +38,23 @@ def _run_epoch(model, loader, optimizer, criterion, device):
     return total_loss / max(total_examples, 1)
 
 
+def _is_better_checkpoint(candidate_metrics: dict, best_metrics: dict | None) -> bool:
+    if best_metrics is None:
+        return True
+
+    candidate_key = (
+        float(candidate_metrics["roc_auc"]),
+        float(candidate_metrics["balanced_accuracy"]),
+        -float(candidate_metrics["loss"]),
+    )
+    best_key = (
+        float(best_metrics["roc_auc"]),
+        float(best_metrics["balanced_accuracy"]),
+        -float(best_metrics["loss"]),
+    )
+    return candidate_key > best_key
+
+
 @torch.no_grad()
 def _evaluate(model, loader, criterion, device):
     model.eval()
@@ -73,6 +90,7 @@ def train_model(
     training_config: dict,
     output_dir: str | Path,
     device: str = "cpu",
+    train_seed: int | None = None,
 ) -> TrainingArtifacts:
     input_dim = infer_input_dim(train_path, representation)
     model = build_model(model_name, input_dim).to(device)
@@ -82,7 +100,11 @@ def train_model(
     test_ds = CryptoDataset(test_path, representation)
 
     batch_size = int(training_config["batch_size"])
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True)
+    loader_generator = None
+    if train_seed is not None:
+        loader_generator = torch.Generator()
+        loader_generator.manual_seed(int(train_seed))
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, generator=loader_generator)
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False)
 
@@ -90,6 +112,12 @@ def train_model(
         model.parameters(),
         lr=float(training_config["learning_rate"]),
         weight_decay=float(training_config["weight_decay"]),
+    )
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        mode="min",
+        factor=float(training_config.get("scheduler_factor", 0.5)),
+        patience=int(training_config.get("scheduler_patience", 2)),
     )
     criterion = nn.BCEWithLogitsLoss()
     epochs = int(training_config["epochs"])
@@ -100,26 +128,29 @@ def train_model(
     checkpoint_path = output_dir / "best_model.pt"
 
     history = []
-    best_val_loss = float("inf")
     best_state = None
+    best_metrics = None
     epochs_without_improvement = 0
 
     for epoch in range(1, epochs + 1):
         train_loss = _run_epoch(model, train_loader, optimizer, criterion, device)
         val_metrics = _evaluate(model, val_loader, criterion, device)
+        scheduler.step(val_metrics["loss"])
         history.append(
             {
                 "epoch": epoch,
                 "train_loss": train_loss,
                 "val_loss": val_metrics["loss"],
                 "val_accuracy": val_metrics["accuracy"],
+                "val_balanced_accuracy": val_metrics["balanced_accuracy"],
                 "val_roc_auc": val_metrics["roc_auc"],
+                "learning_rate": float(optimizer.param_groups[0]["lr"]),
             }
         )
 
-        if val_metrics["loss"] < best_val_loss:
-            best_val_loss = val_metrics["loss"]
+        if _is_better_checkpoint(val_metrics, best_metrics):
             best_state = {key: value.cpu() for key, value in model.state_dict().items()}
+            best_metrics = dict(val_metrics)
             epochs_without_improvement = 0
         else:
             epochs_without_improvement += 1

@@ -5,9 +5,10 @@ This repository contains a course project on learning plaintext-ciphertext relat
 ## Highlights
 
 - Reproducible paired-plaintext dataset generation pipeline
-- Multiple input representations: `concat`, `delta`, and `joint`
-- Three learned distinguishers: `MLP`, `CNN`, and `Siamese`
-- Round-sweep experiment runner for reduced-round analysis
+- Reproducible paired-plaintext dataset generation
+- Multiple input representations, including a statistics-augmented difference encoding
+- Three ML distinguishers: MLP, CNN, Siamese network
+- Multi-seed round-sweep experiment runner
 - Report assets, plots, and summary tables ready for submission
 
 ## Key Results
@@ -50,10 +51,10 @@ Run the experiment sweep:
 python scripts/run_experiments.py --config configs/default.yaml
 ```
 
-Build plots from the generated results:
+Build report assets:
 
 ```powershell
-python scripts/make_plots.py --results-dir results/default
+python scripts/build_report_assets.py --config configs/default.yaml
 ```
 
 For a lightweight validation run, use:
@@ -65,12 +66,12 @@ python scripts/run_experiments.py --config configs/fast_smoke.yaml
 ## Reproducibility Notes
 
 - The random baseline is implemented as a lazy random permutation over the queried domain to preserve permutation behavior on sampled plaintexts.
-- The project uses `Speck32/64` because it is lightweight to simulate and well suited for round-wise cryptanalysis experiments.
-- Seeds and configuration values are centralized so the same setup can be rerun consistently.
+- The default setup uses Speck32/64 because it is lightweight, fast to implement, and well-suited to round-wise cryptanalysis experiments.
+- The default configuration aggregates results across two training seeds and reports mean/std metrics for stronger experimental rigor.
 
 ## Report Assets
 
-- Final report: [`report/ML1_Report_Arnav_Batra.pdf`](report/ML1_Report_Arnav_Batra.pdf)
+- Final report: [`report/ML1_Report_Arnav_Batra.md`](report/ML1_Report_Arnav_Batra.md)
 - Accuracy plot: [`report/figures/accuracy_vs_rounds.png`](report/figures/accuracy_vs_rounds.png)
 - AUC plot: [`report/figures/auc_vs_rounds.png`](report/figures/auc_vs_rounds.png)
 - Best-by-round summary: [`report/tables/best_by_round.csv`](report/tables/best_by_round.csv)

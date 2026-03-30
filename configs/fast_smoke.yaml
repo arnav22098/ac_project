@@ -15,15 +15,24 @@ data:
 
 representations:
   - delta
+  - delta_stats
   - concat
   - joint
 
 training:
-  epochs: 2
+  epochs: 3
   batch_size: 64
   learning_rate: 0.001
   weight_decay: 0.00001
   early_stopping_patience: 2
+  scheduler_patience: 1
+  scheduler_factor: 0.5
+
+evaluation:
+  train_seeds: [7, 11]
+  effective_balanced_accuracy: 0.60
+  effective_roc_auc: 0.60
+  minimum_effective_seed_count: 1
 
 models:
   - mlp

@@ -20,7 +20,7 @@ def train_model_main() -> None:
     parser = argparse.ArgumentParser(description="Train one model/representation/round combo.")
     parser.add_argument("--config", required=True, help="Path to YAML config.")
     parser.add_argument("--rounds", required=True, type=int, help="Number of Speck rounds.")
-    parser.add_argument("--representation", required=True, choices=["delta", "concat", "joint"])
+    parser.add_argument("--representation", required=True, choices=["delta", "delta_stats", "concat", "joint"])
     parser.add_argument("--model", required=True, choices=["mlp", "cnn", "siamese"])
     args = parser.parse_args()
     run_single_training(args.config, args.rounds, args.representation, args.model)

@@ -1,9 +1,12 @@
 model,representation,max_effective_round
 cnn,concat,3
 cnn,delta,4
+cnn,delta_stats,4
 mlp,concat,4
 mlp,delta,5
+mlp,delta_stats,4
 mlp,joint,3
 siamese,concat,4
-siamese,delta,5
+siamese,delta,4
+siamese,delta_stats,4
 siamese,joint,4

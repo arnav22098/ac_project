@@ -12,16 +12,18 @@ class SiameseDistinguisher(nn.Module):
         branch_dim = input_dim // 2
         self.branch_dim = branch_dim
         self.encoder = nn.Sequential(
-            nn.Linear(branch_dim, 128),
+            nn.Linear(branch_dim, 192),
+            nn.BatchNorm1d(192),
             nn.ReLU(),
-            nn.Linear(128, 64),
+            nn.Dropout(0.1),
+            nn.Linear(192, 96),
             nn.ReLU(),
         )
         self.head = nn.Sequential(
-            nn.Linear(64 * 3, 128),
+            nn.Linear(96 * 4, 160),
             nn.ReLU(),
             nn.Dropout(0.2),
-            nn.Linear(128, 1),
+            nn.Linear(160, 1),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -30,5 +32,6 @@ class SiameseDistinguisher(nn.Module):
         left_embed = self.encoder(left)
         right_embed = self.encoder(right)
         diff = torch.abs(left_embed - right_embed)
-        joined = torch.cat([left_embed, right_embed, diff], dim=1)
+        prod = left_embed * right_embed
+        joined = torch.cat([left_embed, right_embed, diff, prod], dim=1)
         return self.head(joined)

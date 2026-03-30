@@ -25,14 +25,54 @@ def _result_dir(config: dict, rounds: int, representation: str, model_name: str)
     return Path(config["results"]["output_dir"]) / f"round_{rounds}" / representation / model_name
 
 
-def run_single_training(config_path: str, rounds: int, representation: str, model_name: str) -> dict:
+def _training_seeds(config: dict) -> list[int]:
+    evaluation = config.get("evaluation", {})
+    if "train_seeds" in evaluation:
+        return [int(seed) for seed in evaluation["train_seeds"]]
+    return [int(config["seed"])]
+
+
+def _metric_columns(frame: pd.DataFrame) -> list[str]:
+    excluded = {"rounds", "representation", "model", "train_seed"}
+    return [column for column in frame.columns if column not in excluded]
+
+
+def _aggregate_summary(frame: pd.DataFrame, config: dict) -> pd.DataFrame:
+    metric_columns = _metric_columns(frame)
+    mean_frame = frame.groupby(["rounds", "representation", "model"], as_index=False)[metric_columns].mean()
+    std_frame = frame.groupby(["rounds", "representation", "model"], as_index=False)[metric_columns].std(ddof=0).fillna(0.0)
+    merged = mean_frame.copy()
+    for column in metric_columns:
+        merged[f"{column}_std"] = std_frame[column]
+
+    evaluation = config.get("evaluation", {})
+    bal_threshold = float(evaluation.get("effective_balanced_accuracy", 0.60))
+    auc_threshold = float(evaluation.get("effective_roc_auc", 0.60))
+    effective_seed_counts = (
+        frame.assign(
+            seed_effective=lambda df: (
+                (df["balanced_accuracy"] >= bal_threshold) & (df["roc_auc"] >= auc_threshold)
+            ).astype(int)
+        )
+        .groupby(["rounds", "representation", "model"], as_index=False)["seed_effective"]
+        .sum()
+        .rename(columns={"seed_effective": "effective_seed_count"})
+    )
+    merged = merged.merge(effective_seed_counts, on=["rounds", "representation", "model"], how="left")
+    merged["num_seeds"] = len(_training_seeds(config))
+    return merged.sort_values(["model", "representation", "rounds"]).reset_index(drop=True)
+
+
+def run_single_training(config_path: str, rounds: int, representation: str, model_name: str, train_seed: int | None = None) -> dict:
     config = load_config(config_path)
-    set_seed(int(config["seed"]))
+    set_seed(int(train_seed if train_seed is not None else config["seed"]))
 
     dataset_dir = Path(config["data"]["output_dir"]) / f"round_{rounds}"
     if not (dataset_dir / "train.npz").exists():
         generate_datasets_for_round(config, rounds)
     output_dir = _result_dir(config, rounds, representation, model_name)
+    if train_seed is not None:
+        output_dir = output_dir / f"seed_{int(train_seed)}"
     artifacts = train_model(
         train_path=str(dataset_dir / "train.npz"),
         val_path=str(dataset_dir / "val.npz"),
@@ -42,12 +82,14 @@ def run_single_training(config_path: str, rounds: int, representation: str, mode
         training_config=config["training"],
         output_dir=output_dir,
         device=config.get("device", "cpu"),
+        train_seed=train_seed,
     )
 
     result = {
         "rounds": rounds,
         "representation": representation,
         "model": model_name,
+        "train_seed": int(train_seed if train_seed is not None else config["seed"]),
         **artifacts.metrics,
     }
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -63,17 +105,26 @@ def run_all_experiments(config_path: str) -> None:
     generate_all_datasets(config_path)
 
     records = []
+    train_seeds = _training_seeds(config)
     for rounds in config["data"]["rounds"]:
         for representation in config["representations"]:
             for model_name in config["models"]:
-                print(f"Training rounds={rounds} representation={representation} model={model_name}")
-                result = run_single_training(config_path, int(rounds), representation, model_name)
-                records.append(result)
+                for train_seed in train_seeds:
+                    print(
+                        f"Training rounds={rounds} representation={representation} "
+                        f"model={model_name} seed={train_seed}"
+                    )
+                    result = run_single_training(config_path, int(rounds), representation, model_name, train_seed=train_seed)
+                    records.append(result)
 
     results_dir = Path(config["results"]["output_dir"])
     results_dir.mkdir(parents=True, exist_ok=True)
-    frame = pd.DataFrame(records).sort_values(["model", "representation", "rounds"])
-    frame.to_csv(results_dir / "summary.csv", index=False)
+    with (results_dir / "config_snapshot.json").open("w", encoding="utf-8") as handle:
+        json.dump(config, handle, indent=2)
+    frame = pd.DataFrame(records).sort_values(["model", "representation", "rounds", "train_seed"])
+    frame.to_csv(results_dir / "summary_by_seed.csv", index=False)
+    summary = _aggregate_summary(frame, config)
+    summary.to_csv(results_dir / "summary.csv", index=False)
     build_plots(results_dir)
     print(f"Saved summary to {results_dir / 'summary.csv'}")
 
@@ -88,7 +139,14 @@ def build_plots(results_dir: str | Path) -> None:
     accuracy_fig = plt.figure(figsize=(10, 6))
     for (model_name, representation), subset in frame.groupby(["model", "representation"]):
         subset = subset.sort_values("rounds")
-        plt.plot(subset["rounds"], subset["accuracy"], marker="o", label=f"{model_name}-{representation}")
+        plt.errorbar(
+            subset["rounds"],
+            subset["accuracy"],
+            yerr=subset.get("accuracy_std", 0.0),
+            marker="o",
+            capsize=3,
+            label=f"{model_name}-{representation}",
+        )
     plt.xlabel("Rounds")
     plt.ylabel("Test Accuracy")
     plt.title("Distinguisher Accuracy vs Rounds")
@@ -100,7 +158,14 @@ def build_plots(results_dir: str | Path) -> None:
     auc_fig = plt.figure(figsize=(10, 6))
     for (model_name, representation), subset in frame.groupby(["model", "representation"]):
         subset = subset.sort_values("rounds")
-        plt.plot(subset["rounds"], subset["roc_auc"], marker="o", label=f"{model_name}-{representation}")
+        plt.errorbar(
+            subset["rounds"],
+            subset["roc_auc"],
+            yerr=subset.get("roc_auc_std", 0.0),
+            marker="o",
+            capsize=3,
+            label=f"{model_name}-{representation}",
+        )
     plt.xlabel("Rounds")
     plt.ylabel("ROC-AUC")
     plt.title("ROC-AUC vs Rounds")
@@ -109,9 +174,18 @@ def build_plots(results_dir: str | Path) -> None:
     auc_fig.savefig(results_dir / "auc_vs_rounds.png", dpi=200)
     plt.close(auc_fig)
 
-    balanced_threshold = 0.60
-    auc_threshold = 0.60
-    viable = frame[(frame["balanced_accuracy"] >= balanced_threshold) & (frame["roc_auc"] >= auc_threshold)].copy()
+    config_path = results_dir / "config_snapshot.json"
+    evaluation = {}
+    if config_path.exists():
+        evaluation = json.loads(config_path.read_text(encoding="utf-8")).get("evaluation", {})
+    balanced_threshold = float(evaluation.get("effective_balanced_accuracy", 0.60))
+    auc_threshold = float(evaluation.get("effective_roc_auc", 0.60))
+    minimum_seed_support = int(evaluation.get("minimum_effective_seed_count", 1))
+    viable = frame[
+        (frame["balanced_accuracy"] >= balanced_threshold)
+        & (frame["roc_auc"] >= auc_threshold)
+        & (frame["effective_seed_count"] >= minimum_seed_support)
+    ].copy()
     if viable.empty:
         maximum_effective = pd.DataFrame(columns=["model", "representation", "max_effective_round"])
     else:
@@ -125,7 +199,14 @@ def build_plots(results_dir: str | Path) -> None:
     balanced_fig = plt.figure(figsize=(10, 6))
     for (model_name, representation), subset in frame.groupby(["model", "representation"]):
         subset = subset.sort_values("rounds")
-        plt.plot(subset["rounds"], subset["balanced_accuracy"], marker="o", label=f"{model_name}-{representation}")
+        plt.errorbar(
+            subset["rounds"],
+            subset["balanced_accuracy"],
+            yerr=subset.get("balanced_accuracy_std", 0.0),
+            marker="o",
+            capsize=3,
+            label=f"{model_name}-{representation}",
+        )
     plt.xlabel("Rounds")
     plt.ylabel("Balanced Accuracy")
     plt.title("Balanced Accuracy vs Rounds")
@@ -161,12 +242,44 @@ def build_report_assets(config_path: str) -> None:
     summary = pd.read_csv(results_dir / "summary.csv")
     summary = summary.sort_values(["rounds", "representation", "model"]).copy()
     summary.to_csv(tables_dir / "summary_for_report.csv", index=False)
+    if (results_dir / "summary_by_seed.csv").exists():
+        pd.read_csv(results_dir / "summary_by_seed.csv").to_csv(tables_dir / "summary_by_seed_for_report.csv", index=False)
 
     best_by_round = summary.sort_values(["rounds", "roc_auc"], ascending=[True, False]).groupby("rounds").head(1).copy()
     best_by_round.to_csv(tables_dir / "best_by_round.csv", index=False)
 
     maximum_effective = pd.read_csv(results_dir / "max_effective_rounds.csv")
     maximum_effective.to_csv(tables_dir / "max_effective_rounds.csv", index=False)
+    model_leaderboard = (
+        summary.groupby("model", as_index=False)[["accuracy", "balanced_accuracy", "roc_auc"]]
+        .mean()
+        .sort_values("roc_auc", ascending=False)
+    )
+    model_leaderboard.to_csv(tables_dir / "model_leaderboard.csv", index=False)
+    representation_leaderboard = (
+        summary.groupby("representation", as_index=False)[["accuracy", "balanced_accuracy", "roc_auc"]]
+        .mean()
+        .sort_values("roc_auc", ascending=False)
+    )
+    representation_leaderboard.to_csv(tables_dir / "representation_leaderboard.csv", index=False)
+
+    model_fig = plt.figure(figsize=(8, 5))
+    plt.bar(model_leaderboard["model"], model_leaderboard["roc_auc"])
+    plt.ylabel("Mean ROC-AUC Across All Rounds/Representations")
+    plt.title("Overall Model Comparison")
+    plt.ylim(0.45, 1.0)
+    plt.tight_layout()
+    model_fig.savefig(figures_dir / "model_leaderboard.png", dpi=200)
+    plt.close(model_fig)
+
+    representation_fig = plt.figure(figsize=(8, 5))
+    plt.bar(representation_leaderboard["representation"], representation_leaderboard["roc_auc"])
+    plt.ylabel("Mean ROC-AUC Across All Rounds/Models")
+    plt.title("Overall Representation Comparison")
+    plt.ylim(0.45, 1.0)
+    plt.tight_layout()
+    representation_fig.savefig(figures_dir / "representation_leaderboard.png", dpi=200)
+    plt.close(representation_fig)
 
     rows = []
     for round_dir in sorted(data_dir.glob("round_*")):
