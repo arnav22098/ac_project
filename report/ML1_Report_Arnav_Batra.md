@@ -2,8 +2,7 @@
 
 ## Learning Plaintext-Ciphertext Relations using Machine Learning
 
-**Name:** Arnav Batra  
-**Roll Number:** 2022098
+**Name:** Arnav Batra(2022098), Yatin Rathore(2022592)
 
 ---
 
