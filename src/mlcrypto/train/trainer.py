@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
-
 import numpy as np
 import torch
 from torch import nn
@@ -11,13 +8,6 @@ from torch.utils.data import DataLoader
 from mlcrypto.data.dataset import CryptoDataset, infer_input_dim
 from mlcrypto.models.factory import build_model
 from mlcrypto.train.metrics import classification_metrics
-
-
-@dataclass
-class TrainingArtifacts:
-    metrics: dict
-    history: list[dict]
-    checkpoint_path: Path
 
 
 def _run_epoch(model, loader, optimizer, criterion, device):
@@ -88,10 +78,9 @@ def train_model(
     representation: str,
     model_name: str,
     training_config: dict,
-    output_dir: str | Path,
     device: str = "cpu",
     train_seed: int | None = None,
-) -> TrainingArtifacts:
+) -> dict:
     input_dim = infer_input_dim(train_path, representation)
     model = build_model(model_name, input_dim).to(device)
 
@@ -123,30 +112,14 @@ def train_model(
     epochs = int(training_config["epochs"])
     patience = int(training_config["early_stopping_patience"])
 
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    checkpoint_path = output_dir / "best_model.pt"
-
-    history = []
     best_state = None
     best_metrics = None
     epochs_without_improvement = 0
 
     for epoch in range(1, epochs + 1):
-        train_loss = _run_epoch(model, train_loader, optimizer, criterion, device)
+        _run_epoch(model, train_loader, optimizer, criterion, device)
         val_metrics = _evaluate(model, val_loader, criterion, device)
         scheduler.step(val_metrics["loss"])
-        history.append(
-            {
-                "epoch": epoch,
-                "train_loss": train_loss,
-                "val_loss": val_metrics["loss"],
-                "val_accuracy": val_metrics["accuracy"],
-                "val_balanced_accuracy": val_metrics["balanced_accuracy"],
-                "val_roc_auc": val_metrics["roc_auc"],
-                "learning_rate": float(optimizer.param_groups[0]["lr"]),
-            }
-        )
 
         if _is_better_checkpoint(val_metrics, best_metrics):
             best_state = {key: value.cpu() for key, value in model.state_dict().items()}
@@ -160,9 +133,8 @@ def train_model(
     if best_state is None:
         best_state = {key: value.cpu() for key, value in model.state_dict().items()}
 
-    torch.save(best_state, checkpoint_path)
     model.load_state_dict(best_state)
     model.to(device)
     test_metrics = _evaluate(model, test_loader, criterion, device)
 
-    return TrainingArtifacts(metrics=test_metrics, history=history, checkpoint_path=checkpoint_path)
+    return test_metrics

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import json
+import shutil
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -19,10 +19,6 @@ def generate_all_datasets(config_path: str) -> None:
     for rounds in config["data"]["rounds"]:
         generate_datasets_for_round(config, int(rounds))
         print(f"Generated datasets for round {rounds}")
-
-
-def _result_dir(config: dict, rounds: int, representation: str, model_name: str) -> Path:
-    return Path(config["results"]["output_dir"]) / f"round_{rounds}" / representation / model_name
 
 
 def _training_seeds(config: dict) -> list[int]:
@@ -70,34 +66,24 @@ def run_single_training(config_path: str, rounds: int, representation: str, mode
     dataset_dir = Path(config["data"]["output_dir"]) / f"round_{rounds}"
     if not (dataset_dir / "train.npz").exists():
         generate_datasets_for_round(config, rounds)
-    output_dir = _result_dir(config, rounds, representation, model_name)
-    if train_seed is not None:
-        output_dir = output_dir / f"seed_{int(train_seed)}"
-    artifacts = train_model(
+    metrics = train_model(
         train_path=str(dataset_dir / "train.npz"),
         val_path=str(dataset_dir / "val.npz"),
         test_path=str(dataset_dir / "test.npz"),
         representation=representation,
         model_name=model_name,
         training_config=config["training"],
-        output_dir=output_dir,
         device=config.get("device", "cpu"),
         train_seed=train_seed,
     )
 
-    result = {
+    return {
         "rounds": rounds,
         "representation": representation,
         "model": model_name,
         "train_seed": int(train_seed if train_seed is not None else config["seed"]),
-        **artifacts.metrics,
+        **metrics,
     }
-    output_dir.mkdir(parents=True, exist_ok=True)
-    with (output_dir / "metrics.json").open("w", encoding="utf-8") as handle:
-        json.dump(result, handle, indent=2)
-    with (output_dir / "history.json").open("w", encoding="utf-8") as handle:
-        json.dump(artifacts.history, handle, indent=2)
-    return result
 
 
 def run_all_experiments(config_path: str) -> None:
@@ -119,17 +105,21 @@ def run_all_experiments(config_path: str) -> None:
 
     results_dir = Path(config["results"]["output_dir"])
     results_dir.mkdir(parents=True, exist_ok=True)
-    with (results_dir / "config_snapshot.json").open("w", encoding="utf-8") as handle:
-        json.dump(config, handle, indent=2)
+    for stale_name in ["summary_by_seed.csv", "config_snapshot.json"]:
+        stale_path = results_dir / stale_name
+        if stale_path.exists():
+            stale_path.unlink()
+    for stale_dir in results_dir.glob("round_*"):
+        if stale_dir.is_dir():
+            shutil.rmtree(stale_dir)
     frame = pd.DataFrame(records).sort_values(["model", "representation", "rounds", "train_seed"])
-    frame.to_csv(results_dir / "summary_by_seed.csv", index=False)
     summary = _aggregate_summary(frame, config)
     summary.to_csv(results_dir / "summary.csv", index=False)
-    build_plots(results_dir)
+    build_report_assets(config_path)
     print(f"Saved summary to {results_dir / 'summary.csv'}")
 
 
-def build_plots(results_dir: str | Path) -> None:
+def build_plots(results_dir: str | Path, evaluation: dict | None = None) -> None:
     results_dir = Path(results_dir)
     summary_path = results_dir / "summary.csv"
     frame = pd.read_csv(summary_path)
@@ -174,10 +164,7 @@ def build_plots(results_dir: str | Path) -> None:
     auc_fig.savefig(results_dir / "auc_vs_rounds.png", dpi=200)
     plt.close(auc_fig)
 
-    config_path = results_dir / "config_snapshot.json"
-    evaluation = {}
-    if config_path.exists():
-        evaluation = json.loads(config_path.read_text(encoding="utf-8")).get("evaluation", {})
+    evaluation = evaluation or {}
     balanced_threshold = float(evaluation.get("effective_balanced_accuracy", 0.60))
     auc_threshold = float(evaluation.get("effective_roc_auc", 0.60))
     minimum_seed_support = int(evaluation.get("minimum_effective_seed_count", 1))
@@ -187,12 +174,12 @@ def build_plots(results_dir: str | Path) -> None:
         & (frame["effective_seed_count"] >= minimum_seed_support)
     ].copy()
     if viable.empty:
-        maximum_effective = pd.DataFrame(columns=["model", "representation", "max_effective_round"])
+        maximum_effective = pd.DataFrame(columns=["model", "representation", "maximum_effective_round"])
     else:
         maximum_effective = (
             viable.groupby(["model", "representation"], as_index=False)["rounds"]
             .max()
-            .rename(columns={"rounds": "max_effective_round"})
+            .rename(columns={"rounds": "maximum_effective_round"})
         )
     maximum_effective.to_csv(results_dir / "max_effective_rounds.csv", index=False)
 
@@ -218,9 +205,9 @@ def build_plots(results_dir: str | Path) -> None:
     if not maximum_effective.empty:
         max_rounds_fig = plt.figure(figsize=(10, 6))
         labels = [f"{row.model}-{row.representation}" for row in maximum_effective.itertuples(index=False)]
-        plt.bar(labels, maximum_effective["max_effective_round"])
-        plt.ylabel("Max Effective Round")
-        plt.title("Maximum Effective Round by Model/Representation")
+        plt.bar(labels, maximum_effective["maximum_effective_round"])
+        plt.ylabel("Maximum Effective Round")
+        plt.title("Maximum Effective Round by Model and Representation")
         plt.xticks(rotation=35, ha="right")
         plt.tight_layout()
         max_rounds_fig.savefig(results_dir / "max_effective_rounds.png", dpi=200)
@@ -231,54 +218,72 @@ def build_report_assets(config_path: str) -> None:
     config = load_config(config_path)
     results_dir = Path(config["results"]["output_dir"])
     data_dir = Path(config["data"]["output_dir"])
-    build_plots(results_dir)
-
-    report_dir = Path("report")
-    figures_dir = report_dir / "figures"
-    tables_dir = report_dir / "tables"
-    figures_dir.mkdir(parents=True, exist_ok=True)
-    tables_dir.mkdir(parents=True, exist_ok=True)
+    build_plots(results_dir, config.get("evaluation", {}))
 
     summary = pd.read_csv(results_dir / "summary.csv")
     summary = summary.sort_values(["rounds", "representation", "model"]).copy()
-    summary.to_csv(tables_dir / "summary_for_report.csv", index=False)
-    if (results_dir / "summary_by_seed.csv").exists():
-        pd.read_csv(results_dir / "summary_by_seed.csv").to_csv(tables_dir / "summary_by_seed_for_report.csv", index=False)
 
-    best_by_round = summary.sort_values(["rounds", "roc_auc"], ascending=[True, False]).groupby("rounds").head(1).copy()
-    best_by_round.to_csv(tables_dir / "best_by_round.csv", index=False)
+    best_by_round = (
+        summary.sort_values(["rounds", "roc_auc"], ascending=[True, False])
+        .groupby("rounds")
+        .head(1)
+        .loc[:, ["rounds", "model", "representation", "accuracy", "balanced_accuracy", "roc_auc"]]
+        .rename(
+            columns={
+                "rounds": "round",
+                "model": "best_model",
+                "representation": "best_representation",
+            }
+        )
+        .round({"accuracy": 4, "balanced_accuracy": 4, "roc_auc": 4})
+    )
+    best_by_round.to_csv(results_dir / "best_by_round.csv", index=False)
 
-    maximum_effective = pd.read_csv(results_dir / "max_effective_rounds.csv")
-    maximum_effective.to_csv(tables_dir / "max_effective_rounds.csv", index=False)
-    model_leaderboard = (
+    model_ranking = (
         summary.groupby("model", as_index=False)[["accuracy", "balanced_accuracy", "roc_auc"]]
         .mean()
         .sort_values("roc_auc", ascending=False)
+        .rename(
+            columns={
+                "accuracy": "average_accuracy",
+                "balanced_accuracy": "average_balanced_accuracy",
+                "roc_auc": "average_roc_auc",
+            }
+        )
+        .round(4)
     )
-    model_leaderboard.to_csv(tables_dir / "model_leaderboard.csv", index=False)
-    representation_leaderboard = (
+    model_ranking.to_csv(results_dir / "model_ranking.csv", index=False)
+    representation_ranking = (
         summary.groupby("representation", as_index=False)[["accuracy", "balanced_accuracy", "roc_auc"]]
         .mean()
         .sort_values("roc_auc", ascending=False)
+        .rename(
+            columns={
+                "accuracy": "average_accuracy",
+                "balanced_accuracy": "average_balanced_accuracy",
+                "roc_auc": "average_roc_auc",
+            }
+        )
+        .round(4)
     )
-    representation_leaderboard.to_csv(tables_dir / "representation_leaderboard.csv", index=False)
+    representation_ranking.to_csv(results_dir / "representation_ranking.csv", index=False)
 
     model_fig = plt.figure(figsize=(8, 5))
-    plt.bar(model_leaderboard["model"], model_leaderboard["roc_auc"])
-    plt.ylabel("Mean ROC-AUC Across All Rounds/Representations")
-    plt.title("Overall Model Comparison")
+    plt.bar(model_ranking["model"], model_ranking["average_roc_auc"])
+    plt.ylabel("Average ROC-AUC")
+    plt.title("Overall Model Ranking")
     plt.ylim(0.45, 1.0)
     plt.tight_layout()
-    model_fig.savefig(figures_dir / "model_leaderboard.png", dpi=200)
+    model_fig.savefig(results_dir / "model_ranking.png", dpi=200)
     plt.close(model_fig)
 
     representation_fig = plt.figure(figsize=(8, 5))
-    plt.bar(representation_leaderboard["representation"], representation_leaderboard["roc_auc"])
-    plt.ylabel("Mean ROC-AUC Across All Rounds/Models")
-    plt.title("Overall Representation Comparison")
+    plt.bar(representation_ranking["representation"], representation_ranking["average_roc_auc"])
+    plt.ylabel("Average ROC-AUC")
+    plt.title("Overall Representation Ranking")
     plt.ylim(0.45, 1.0)
     plt.tight_layout()
-    representation_fig.savefig(figures_dir / "representation_leaderboard.png", dpi=200)
+    representation_fig.savefig(results_dir / "representation_ranking.png", dpi=200)
     plt.close(representation_fig)
 
     rows = []
@@ -297,8 +302,13 @@ def build_report_assets(config_path: str) -> None:
                     "positive_rate": float(labels.mean()),
                 }
             )
-    dataset_report = pd.DataFrame(rows).sort_values(["rounds", "split"])
-    dataset_report.to_csv(tables_dir / "dataset_balance.csv", index=False)
+    dataset_report = (
+        pd.DataFrame(rows)
+        .sort_values(["rounds", "split"])
+        .rename(columns={"cipher_label_1": "cipher_samples", "random_label_0": "random_samples"})
+        .round({"positive_rate": 4})
+    )
+    dataset_report.to_csv(results_dir / "dataset_balance.csv", index=False)
 
     balance_fig = plt.figure(figsize=(10, 6))
     split_order = ["train", "val", "test"]
@@ -317,16 +327,5 @@ def build_report_assets(config_path: str) -> None:
     plt.title("Dataset Label Balance Across Splits")
     plt.legend()
     plt.tight_layout()
-    balance_fig.savefig(figures_dir / "dataset_balance.png", dpi=200)
+    balance_fig.savefig(results_dir / "dataset_balance.png", dpi=200)
     plt.close(balance_fig)
-
-    for filename in [
-        "accuracy_vs_rounds.png",
-        "auc_vs_rounds.png",
-        "balanced_accuracy_vs_rounds.png",
-        "max_effective_rounds.png",
-    ]:
-        src = results_dir / filename
-        if src.exists():
-            dst = figures_dir / filename
-            dst.write_bytes(src.read_bytes())

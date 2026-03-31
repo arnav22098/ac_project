@@ -4,12 +4,11 @@ This repository contains a course project on learning plaintext-ciphertext relat
 
 ## Highlights
 
-- Reproducible paired-plaintext dataset generation pipeline
 - Reproducible paired-plaintext dataset generation
 - Multiple input representations, including a statistics-augmented difference encoding
 - Three ML distinguishers: MLP, CNN, Siamese network
 - Multi-seed round-sweep experiment runner
-- Report assets, plots, and summary tables ready for submission
+- Final plots, summary tables, and report files ready for submission
 
 ## Key Results
 
@@ -19,17 +18,19 @@ This repository contains a course project on learning plaintext-ciphertext relat
 - Strong performance remains at 4 rounds, with balanced accuracy near `0.79`
 - Effective distinguishers begin to degrade around 5 rounds and above, which matches the expected increase in cipher hardness
 
-The generated report assets and summary tables live in [`report/`](report/) and include comparison plots across rounds, representations, and model families.
+The final experimental results and plots live in [`results/default/`](results/default/), and the final written report lives in [`report/`](report/).
 
 ## Repository Structure
 
-- `configs/`: experiment configurations for full and smoke runs
-- `scripts/`: dataset generation, training, evaluation, plotting, and report asset builders
+- `configs/`: experiment configuration
+- `results/default/`: final experimental results and plots for submission
+- `main.py`: single command-line entrypoint for the whole project
+- `src/mlcrypto/data/`: dataset generation and feature representations
 - `src/mlcrypto/crypto/`: reduced-round Speck and random-permutation baseline
 - `src/mlcrypto/models/`: neural model definitions
 - `src/mlcrypto/train/`: experiment orchestration, metrics, and training loops
 - `src/mlcrypto/utils/`: config loading and reproducibility helpers
-- `report/`: report markdown, PDF export, figures, and summary tables
+- `report/`: final report files
 
 ## Quick Start
 
@@ -42,26 +43,15 @@ pip install -r requirements.txt
 Generate a dataset:
 
 ```powershell
-python scripts/generate_dataset.py --config configs/default.yaml
+python main.py generate-dataset --config configs/default.yaml
 ```
 
 Run the experiment sweep:
 
 ```powershell
-python scripts/run_experiments.py --config configs/default.yaml
+python main.py run-experiments --config configs/default.yaml
 ```
-
-Build report assets:
-
-```powershell
-python scripts/build_report_assets.py --config configs/default.yaml
-```
-
-For a lightweight validation run, use:
-
-```powershell
-python scripts/run_experiments.py --config configs/fast_smoke.yaml
-```
+This single command also writes the final CSV summaries and plots used in the report.
 
 ## Reproducibility Notes
 
@@ -71,10 +61,12 @@ python scripts/run_experiments.py --config configs/fast_smoke.yaml
 
 ## Report Assets
 
-- Final report: [`report/ML1_Report_Arnav_Batra.md`](report/ML1_Report_Arnav_Batra.md)
-- Accuracy plot: [`report/figures/accuracy_vs_rounds.png`](report/figures/accuracy_vs_rounds.png)
-- AUC plot: [`report/figures/auc_vs_rounds.png`](report/figures/auc_vs_rounds.png)
-- Best-by-round summary: [`report/tables/best_by_round.csv`](report/tables/best_by_round.csv)
+- Final report: [`report/2022098_2022592_FinalReport.md`](report/2022098_2022592_FinalReport.md)
+- Final PDF: [`report/2022098_2022592_FinalReport.pdf`](report/2022098_2022592_FinalReport.pdf)
+- Results summary: [`results/default/summary.csv`](results/default/summary.csv)
+- Accuracy plot: [`results/default/accuracy_vs_rounds.png`](results/default/accuracy_vs_rounds.png)
+- AUC plot: [`results/default/auc_vs_rounds.png`](results/default/auc_vs_rounds.png)
+- Best-by-round summary: [`results/default/best_by_round.csv`](results/default/best_by_round.csv)
 
 ## Tech Stack
 

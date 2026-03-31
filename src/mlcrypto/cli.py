@@ -1,47 +1,36 @@
 import argparse
 
 from mlcrypto.train.experiment import (
-    build_plots,
-    build_report_assets,
     generate_all_datasets,
     run_all_experiments,
-    run_single_training,
 )
 
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="ML cryptanalysis project runner.")
+    subparsers = parser.add_subparsers(dest="command", required=True)
 
-def generate_dataset_main() -> None:
-    parser = argparse.ArgumentParser(description="Generate Speck/random-permutation datasets.")
-    parser.add_argument("--config", required=True, help="Path to YAML config.")
-    args = parser.parse_args()
-    generate_all_datasets(args.config)
+    generate_parser = subparsers.add_parser("generate-dataset", help="Generate Speck/random-permutation datasets.")
+    generate_parser.add_argument("--config", required=True, help="Path to YAML config.")
 
+    run_parser = subparsers.add_parser(
+        "run-experiments",
+        help="Generate datasets, train all configured models, and write final plots/tables.",
+    )
+    run_parser.add_argument("--config", required=True, help="Path to YAML config.")
 
-def train_model_main() -> None:
-    parser = argparse.ArgumentParser(description="Train one model/representation/round combo.")
-    parser.add_argument("--config", required=True, help="Path to YAML config.")
-    parser.add_argument("--rounds", required=True, type=int, help="Number of Speck rounds.")
-    parser.add_argument("--representation", required=True, choices=["delta", "delta_stats", "concat", "joint"])
-    parser.add_argument("--model", required=True, choices=["mlp", "cnn", "siamese"])
-    args = parser.parse_args()
-    run_single_training(args.config, args.rounds, args.representation, args.model)
+    return parser
 
 
-def run_experiments_main() -> None:
-    parser = argparse.ArgumentParser(description="Generate datasets and train all configured models.")
-    parser.add_argument("--config", required=True, help="Path to YAML config.")
-    args = parser.parse_args()
-    run_all_experiments(args.config)
+def main(argv: list[str] | None = None) -> None:
+    parser = build_parser()
+    args = parser.parse_args(argv)
 
+    if args.command == "generate-dataset":
+        generate_all_datasets(args.config)
+        return
 
-def make_plots_main() -> None:
-    parser = argparse.ArgumentParser(description="Create plots from experiment results.")
-    parser.add_argument("--results-dir", required=True, help="Directory containing summary.csv")
-    args = parser.parse_args()
-    build_plots(args.results_dir)
+    if args.command == "run-experiments":
+        run_all_experiments(args.config)
+        return
 
-
-def build_report_assets_main() -> None:
-    parser = argparse.ArgumentParser(description="Create report figures and tables from config outputs.")
-    parser.add_argument("--config", required=True, help="Path to YAML config.")
-    args = parser.parse_args()
-    build_report_assets(args.config)
+    raise ValueError(f"Unknown command: {args.command}")
